@@ -20,8 +20,7 @@ import {ERC20} from "../lib/solmate/src/tokens/ERC20.sol";
 
 contract SampleContractTest is Test {
     using SafeTransferLib for ERC20;
-
-
+    
     ERC20 public constant BADGER = ERC20(0x3472A5A71965499acd81997a54BBA8D852C6E53d);
     
     // Become this guy
