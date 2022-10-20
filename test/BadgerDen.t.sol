@@ -31,53 +31,66 @@ contract SampleContractTest is Test {
     }
 
     function getSomeToken() internal {
-        // become whale
         vm.prank(0xF04a5cC80B1E94C69B48f5ee68a08CD2F09A7c3E);
-        WETH.safeTransfer(address(this), 123e18);
-        assert(WETH.balanceOf(address(this)) == 123e18);
+        WETH.safeTransfer(address(this), 100e18);
+        assert(WETH.balanceOf(address(this)) == 100e18);
     }
 
     function testBasicSetupWorks() public view {
+        assert(address(den.EBTC()) != address(0));
         assert(den.COLLATERAL() == WETH);
         assert(den.ORACLE() == ORACLE);
     }
 
-    function testBasicDeposit() public {
-        // Test is scoped so you need to re-do setup each test
-        getSomeToken();
-
-        WETH.safeApprove(address(den), 42069);
-        den.deposit(0, 1337);
-
+    function testCreateVault() public {
+        den.createVault();
         assert(den.nextVaultId() == 1);
         assert(den.balanceOf(address(this)) == 1);
         assert(den.ownerOf(0) == address(this));
+        (uint256 collateral, uint256 borrowed) = den.getVaultState(0);
+        assert(collateral == 0);
+        assert(borrowed == 0);
+    }
 
-        (uint256 collateral,) = den.getVaultState(0);
-        assert(collateral == 1337);
+    function testFailDepositNoVault() public {
+        getSomeToken();
+        WETH.safeApprove(address(den), 1e18);
+        
+        den.deposit(0, 1e18);
+    }
 
-        den.deposit(1, 1337);
-        uint256 vault0 = den.getUserVaults(address(this), 0);
-        assert(vault0 == 0);
-        uint256 vault1 = den.getUserVaults(address(this), 1);
-        assert(vault1 == 1);
+    function testDeposit() public {
+        getSomeToken();
+        WETH.safeApprove(address(den), 100e18);
+        den.createVault();
 
-        den.deposit(1, 1337);
-        (uint256 increasedCollateral,) = den.getVaultState(1);
-        assert(increasedCollateral == 1337 * 2);
+        den.deposit(0, 5e17);
+
+        (uint256 collateral, uint256 borrowed) = den.getVaultState(0);
+        assert(collateral == 5e17);
+        assert(borrowed == 0);
+
+        uint256 vault = den.tokenOfOwnerByIndex(address(this), 0);
+        assert(vault == 0);
+
+        den.deposit(0, 5e17);
+
+        (uint256 newCollateral, uint256 newBorrowed) = den.getVaultState(0);
+        assert(newCollateral == 1e18);
+        assert(newBorrowed == 0);
     }
 
     function testFailInvalidVaultDeposit() public {
         getSomeToken();
 
-        WETH.safeApprove(address(den), 1337);
+        WETH.safeApprove(address(den), 1e18);
 
-        den.deposit(1, 1337);
+        den.deposit(1, 1e18);
     }
 
     function testFailBasicDepositMissingFunds() public {
-        WETH.safeApprove(address(den), 1337);
+        WETH.safeApprove(address(den), 1e18);
 
-        den.deposit(0, 1337);
+        den.deposit(0, 1e18);
     }
 }
