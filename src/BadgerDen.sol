@@ -101,6 +101,7 @@ contract BadgerDen is ERC721 {
         
         // Check if borrow is solvent
         uint256 maxBorrowCached = maxBorrow(_vaultId);
+        emit Debug("maxBorrowCached", maxBorrowCached);
 
         // how does the caching there help?
         require(borrowCached <= maxBorrowCached, "Over debt limit");

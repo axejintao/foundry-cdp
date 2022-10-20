@@ -46,12 +46,25 @@ contract SampleContractTest is Test {
         // Test is scoped so you need to re-do setup each test
         getSomeToken();
 
-        WETH.safeApprove(address(den), 1337);
+        WETH.safeApprove(address(den), 42069);
         den.deposit(0, 1337);
 
         assert(den.nextVaultId() == 1);
         assert(den.balanceOf(address(this)) == 1);
         assert(den.ownerOf(0) == address(this));
+
+        (uint256 collateral,,) = den.getVaultState(0);
+        assert(collateral == 1337);
+
+        den.deposit(1, 1337);
+        uint256 vault0 = den.getUserVaults(address(this), 0);
+        assert(vault0 == 0);
+        uint256 vault1 = den.getUserVaults(address(this), 1);
+        assert(vault1 == 1);
+
+        den.deposit(1, 1337);
+        (uint256 increasedCollateral,,) = den.getVaultState(1);
+        assert(increasedCollateral == 1337 * 2);
     }
 
     function testFailInvalidVaultDeposit() public {
@@ -64,7 +77,7 @@ contract SampleContractTest is Test {
 
     function testFailBasicDepositMissingFunds() public {
         WETH.safeApprove(address(den), 1337);
-        
+
         den.deposit(0, 1337);
     }
 }
