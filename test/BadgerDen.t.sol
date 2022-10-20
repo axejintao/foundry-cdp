@@ -53,7 +53,7 @@ contract SampleContractTest is Test {
         assert(den.balanceOf(address(this)) == 1);
         assert(den.ownerOf(0) == address(this));
 
-        (uint256 collateral,,) = den.getVaultState(0);
+        (uint256 collateral,) = den.getVaultState(0);
         assert(collateral == 1337);
 
         den.deposit(1, 1337);
@@ -63,7 +63,7 @@ contract SampleContractTest is Test {
         assert(vault1 == 1);
 
         den.deposit(1, 1337);
-        (uint256 increasedCollateral,,) = den.getVaultState(1);
+        (uint256 increasedCollateral,) = den.getVaultState(1);
         assert(increasedCollateral == 1337 * 2);
     }
 

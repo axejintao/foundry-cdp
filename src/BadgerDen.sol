@@ -16,7 +16,6 @@ enum RepayWith {
 }
 
 struct VaultState {
-    uint256 id;
     uint256 collateral;
     uint256 borrowed;
 }
@@ -69,7 +68,7 @@ contract BadgerDen is ERC721 {
 
         // create vault state for user if not available, increment vault id
         if (_vaultId == nextVaultId) {
-            getVaultState[_vaultId] = VaultState(_vaultId, 0, 0);
+            getVaultState[_vaultId] = VaultState(0, 0);
             getUserVaults[msg.sender].push(_vaultId);
             _mint(msg.sender, _vaultId);
             nextVaultId++;
