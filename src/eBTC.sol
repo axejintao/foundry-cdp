@@ -1,24 +1,22 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.15;
 
-contract eBTC {
+import {ERC20} from "../lib/solmate/src/tokens/ERC20.sol";
+
+contract eBTC is ERC20 {
     address immutable OWNER;
 
     mapping(address => uint256) balances;
 
-    constructor() {
+    constructor() ERC20("Ethereum Based Synthetic Bitcoin","eBTC", 18) {
         OWNER = msg.sender;
     }
 
-    function mint(address recipient, uint256 amount) external {
-        balances[recipient] += amount;
+    function mint(address to, uint256 amount) external {
+        _mint(to, amount);
     }
 
-    function balanceOf(address recipient) external view returns (uint256) {
-        return balances[recipient];
-    }
-
-    function burn(address recipient, uint256 amount) external {
-        balances[recipient] -= amount;
+    function burn(address from, uint256 amount) external {
+        _burn(from, amount);
     }
 }

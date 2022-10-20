@@ -4,7 +4,8 @@ pragma solidity 0.8.15;
 // NOTE: Solmate doesn't check for token existence, this may cause bugs if you enable any collateral
 import {SafeTransferLib} from "../lib/solmate/src/utils/SafeTransferLib.sol";
 
-import {ERC20} from "../lib/solmate/src/tokens/ERC20.sol";
+import { ERC20 } from "../lib/solmate/src/tokens/ERC20.sol";
+import { ERC721 } from "../lib/solmate/src/tokens/ERC721.sol";
 
 import { AggregatorV2V3Interface } from "./interfaces/Oracle.sol";
 import { eBTC } from "./eBTC.sol";
@@ -17,148 +18,116 @@ enum RepayWith {
 struct VaultState {
     uint256 id;
     uint256 collateral;
-    uint256 borrow;
+    uint256 borrowed;
 }
 
 interface ICallbackRecipient {
     function flashMintCallback(address initiator, uint256 amount, bytes memory data) external returns (RepayWith, uint256);
 }
 
+// TODO: transfer from will break the user vault mapping, consider erc721 enumerable
 // construct a naive multiparty cdp based on WETH collateral and ChainLink oracle pricing for btc
-contract BadgerDen {
+contract BadgerDen is ERC721 {
     using SafeTransferLib for ERC20;
 
-    uint256 constant MAX_BPS = 10_000;
-    uint256 constant LIQUIDATION_TRESHOLD = 10_000; // 100% in BPS
     uint256 constant RATIO_DECIMALS = 10 ** 8;
+    uint256 constant NUMERATOR = 1e36; // is there a better way to do this, gives 18 decimal rate
 
     // TODO: should this naming convention be ugly EBtc? :(
     eBTC immutable public EBTC;
     ERC20 immutable public COLLATERAL;
+    AggregatorV2V3Interface immutable public ORACLE;
 
-    // TODO: utilize address <> nft mappings to allow
-    // for multiple positions per user with various risk 
-    // i.e. one 5x position and one 2x positions with different sizings
-    // also allows for positions to be passed between wallets to avoid need to unwind
-    mapping(address => VaultState) public userVaults;
-    mapping(uint256 => VaultState) public vaultIds;
+    // Vault Storage
+    mapping(address => uint256[]) public getUserVaults;
+    mapping(uint256 => VaultState) public getVaultState;
 
-    uint256 ratio = 8e17; 
+    uint256 loanToValue = 8e17; 
     // allow vault id zero to be used as a canary
-    uint256 currentVault = 1;
-    uint256 totalDeposited;
-    uint256 totalBorrowed;
+    uint256 public nextVaultId = 0;
+    uint256 public totalDeposited;
+    uint256 public totalBorrowed;
 
     event Debug(string name, uint256 amount);
 
-    constructor() {
+    constructor() ERC721("eBTC Collateralized Debt Position", "eBTC-CDP") {
         EBTC = new eBTC();
         COLLATERAL = ERC20(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2); // WETH
+        ORACLE = AggregatorV2V3Interface(0xdeb288F737066589598e9214E782fa5A8eD689e8);
     }
 
     // lol let anyone set the ltv 
-    function setRatio(uint256 _ratio) external {
-        ratio = _ratio;
-    }
-
-    function flash(uint256 amount, ICallbackRecipient target, bytes memory data) external {
-        // No checks as we allow minting after
-
-        // Effetcs
-        uint256 newTotalBorrowed = totalBorrowed + amount;
-
-        totalBorrowed = newTotalBorrowed;
-
-        // Interactions
-        // Flash mint amount
-        // Safe because DAI is nonReentrant as we know impl
-        EBTC.mint(address(target), amount);
-
-
-        // Callback
-        (RepayWith collateralChoice, uint256 repayAmount) = target.flashMintCallback(msg.sender, amount, data);
-
-
-        // Check solvency
-        if(totalBorrowed > maxBorrow(0)) {
-            if(collateralChoice == RepayWith.DAI) {
-                uint256 minRepay = totalBorrowed - maxBorrow(0);
-                // They must repay
-                // This is min repayment
-                require(repayAmount >= minRepay);
-
-                // TODO: This may be gameable must fuzz etc.. this is a toy project bruh
-                totalBorrowed -= repayAmount;
-
-                // Get the repayment
-                // DAI Cannot reenter because we know impl, DO NOT ADD HOOKS OR YOU WILL GET REKT
-                EBTC.burn(address(target), repayAmount);
-            } else {
-                // They repay with collateral
-
-                // NOTE: WARN
-                // This can reenter for sure, DO NOT USE IN PROD
-                deposit(repayAmount);
-
-                assert(isSolvent(0));
-            }
-        }
+    function setLoanToValue(uint256 _loanToValue) external {
+        loanToValue = _loanToValue;
     }
 
     // Deposit
-    function deposit(uint256 amount) public {
-        VaultState memory depositorVault = userVaults[msg.sender];
+    // TODO: does it matter if someone deposits on behalf of someone else?
+    function deposit(uint256 _vaultId, uint256 _amount) public {
+        require(COLLATERAL.balanceOf(msg.sender) >= _amount, "Insufficient collateral");
+        require(_vaultId <= nextVaultId, "Invalid vaultId");
 
         // create vault state for user if not available, increment vault id
-        if (depositorVault.id == 0) {
-            depositorVault = VaultState(currentVault, 0, 0);
-            vaultIds[currentVault] = depositorVault;
-            userVaults[msg.sender] = depositorVault;
-            currentVault++;
+        if (_vaultId == nextVaultId) {
+            getVaultState[_vaultId] = VaultState(_vaultId, 0, 0);
+            getUserVaults[msg.sender].push(_vaultId);
+            _mint(msg.sender, _vaultId);
+            nextVaultId++;
         }
 
         // Increase deposited
-        totalDeposited += amount;
-        depositorVault.collateral += amount;
+        totalDeposited += _amount;
+        getVaultState[_vaultId].collateral += _amount;
 
         // Check delta + transfer
         uint256 prevBal = COLLATERAL.balanceOf(address(this));
         emit Debug("prevBal", prevBal);
-        COLLATERAL.safeTransferFrom(msg.sender, address(this), amount);
+        COLLATERAL.safeTransferFrom(msg.sender, address(this), _amount);
         uint256 afterBal = COLLATERAL.balanceOf(address(this));
 
         // Make sure we got the amount we expected
-        require(afterBal - prevBal == amount, "No feeOnTransfer");   
+        require(afterBal - prevBal == _amount, "No feeOnTransfer");   
     }
 
     // Borrow
-    function borrow(uint256 amount) external {
-        VaultState memory depositorVault = userVaults[msg.sender];
-        require(depositorVault.id != 0 && depositorVault.collateral != 0, "Borrow against no collateral");
+    function borrow(uint256 _vaultId, uint256 _amount) external {
+        require(ownerOf(_vaultId) == msg.sender, "Borrow against non owned collateral");
+        uint256 collateral = getVaultState[_vaultId].collateral;
+        require(collateral != 0, "Borrow against no collateral");
 
         // Checks
-        depositorVault.borrow += amount;
+        uint256 borrowCached = getVaultState[_vaultId].borrowed;
+        getVaultState[_vaultId].borrowed = borrowCached + _amount;
         
         // Check if borrow is solvent
-        uint256 maxBorrowCached = maxBorrow(depositorVault.id);
+        uint256 maxBorrowCached = maxBorrow(_vaultId);
 
-        require(depositorVault.borrow <= maxBorrowCached, "Over debt limit");
+        // how does the caching there help?
+        require(borrowCached <= maxBorrowCached, "Over debt limit");
 
         // Effect
-        totalBorrowed += amount;
+        totalBorrowed += _amount;
 
         // Interaction
-        EBTC.mint(msg.sender, amount);
+        EBTC.mint(msg.sender, _amount);
     }
 
-    function maxBorrow(uint256 _vaultId) public view returns (uint256) {
-        VaultState memory depositorVault = vaultIds[_vaultId];
-        return depositorVault.collateral * ratio / RATIO_DECIMALS;
-    }
+    // Repay
+    // TODO: does it matter if someone repays on behalf of someone else?
+    // TODO: difference between repay and liquidate, who is calling - and an incentive?
+    function repay(uint256 _vaultId, uint256 _amount) external {
+        uint256 borrowed = getVaultState[_vaultId].borrowed;
+        require(borrowed != 0, "Repay against no debt");
+        require(borrowed <= _amount, "Repay greater than debt");
 
-    function isSolvent(uint256 _vaultId) public view returns (bool) {
-        VaultState memory depositorVault = vaultIds[_vaultId];
-        return depositorVault.borrow <= maxBorrow(_vaultId);
+        getVaultState[_vaultId].borrowed -=  _amount;
+        totalBorrowed -= _amount;
+
+        uint256 prevBal = EBTC.balanceOf(msg.sender);
+        emit Debug("prevBal", prevBal);
+        EBTC.burn(msg.sender, _amount);
+        uint256 afterBal = EBTC.balanceOf(address(this));
+        require(afterBal - prevBal == _amount, "Require appropriate payment");
     }
 
     // Liquidate
@@ -182,4 +151,24 @@ contract BadgerDen {
         EBTC.burn(msg.sender, excessDebt);
     }
 
+    function tokenURI(uint256 id) public view virtual override returns (string memory) {
+        return "";
+    }
+
+    function maxBorrow(uint256 _vaultId) public view returns (uint256) {
+        VaultState memory depositorVault = getVaultState[_vaultId];
+        uint256 maxCollateral = depositorVault.collateral * loanToValue / RATIO_DECIMALS;
+        return maxCollateral * getTokensPerCollateral();
+    }
+
+    function isSolvent(uint256 _vaultId) public view returns (bool) {
+        VaultState memory depositorVault = getVaultState[_vaultId];
+        return depositorVault.borrowed <= maxBorrow(_vaultId);
+    }
+
+    // TODO: this is a naive check, really would want to scrutinize
+    function getTokensPerCollateral() public view returns (uint256) {
+        (, int256 answer,,,) = ORACLE.latestRoundData(); 
+        return NUMERATOR / uint256(answer);
+    }
 }
