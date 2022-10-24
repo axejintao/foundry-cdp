@@ -66,13 +66,7 @@ contract BadgerDen is ERC721Enumerable {
         totalDeposited += _amount;
         getVaultState[_vaultId].collateral += _amount;
 
-        // Check delta + transfer
-        uint256 prevBal = COLLATERAL.balanceOf(address(this));
         COLLATERAL.safeTransferFrom(msg.sender, address(this), _amount);
-        uint256 afterBal = COLLATERAL.balanceOf(address(this));
-
-        // Make sure we got the amount we expected
-        require(afterBal - prevBal == _amount, "No feeOnTransfer");   
     }
 
     // Withdraw
@@ -85,13 +79,8 @@ contract BadgerDen is ERC721Enumerable {
         uint256 remainingBorrowAvailable = getCollateralBorrow(remainingCollateral);
         require(vaultState.borrowed <= remainingBorrowAvailable, "Withdraw will cause liquidation");
         
-        getVaultState[nextVaultId] = VaultState(vaultState.collateral - _amount, vaultState.borrowed);
-
-        uint256 prevBal = COLLATERAL.balanceOf(address(this));
+        getVaultState[_vaultId] = VaultState(vaultState.collateral - _amount, vaultState.borrowed);
         COLLATERAL.safeTransferFrom(address(this), msg.sender, _amount);
-        uint256 afterBal = COLLATERAL.balanceOf(address(this));
-
-        require(afterBal - prevBal == _amount, "No feeOnTransfer");   
     }
 
     // Borrow
@@ -101,8 +90,7 @@ contract BadgerDen is ERC721Enumerable {
         require(collateral != 0, "Borrow against no collateral");
 
         // Checks
-        uint256 borrowCached = getVaultState[_vaultId].borrowed;
-        getVaultState[_vaultId].borrowed = borrowCached + _amount;
+        uint256 borrowCached = getVaultState[_vaultId].borrowed + _amount;
         
         // Check if borrow is solvent
         uint256 maxBorrowCached = getCollateralBorrow(collateral);
@@ -113,6 +101,7 @@ contract BadgerDen is ERC721Enumerable {
 
         // Effect
         totalBorrowed += _amount;
+        getVaultState[_vaultId].borrowed = borrowCached;
 
         // Interaction
         EBTC.mint(msg.sender, _amount);
@@ -153,21 +142,8 @@ contract BadgerDen is ERC721Enumerable {
         uint256 outstandingBorrowed = vaultState.borrowed - _amount;
         getVaultState[_vaultId] = VaultState(remainingCollateral, outstandingBorrowed);
 
-        // burn 
-        uint256 prevDebtBalance = EBTC.balanceOf(msg.sender);
         EBTC.burn(msg.sender, _amount);
-        uint256 afterDebtBalance = EBTC.balanceOf(address(this));
-
-        // Make sure we got the amount we expected
-        require(afterDebtBalance - prevDebtBalance == _amount, "Require appropriate payment");
-
-        // pay liquidator
-        uint256 prevCollateralBalance = COLLATERAL.balanceOf(address(this));
         COLLATERAL.safeTransferFrom(address(this), msg.sender, liquidatedCollateral);
-        uint256 afterCollateralBalance = COLLATERAL.balanceOf(address(this));
-
-        // Make sure we pay the amount we expected
-        require(afterCollateralBalance - prevCollateralBalance == _amount, "Require appropriate payment");
     }
 
     // given you have data for the positions you can make a fun png with this info
