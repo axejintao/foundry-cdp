@@ -108,21 +108,14 @@ contract BadgerDen is ERC721Enumerable {
     }
 
     // Repay
-    // TODO: does it matter if someone repays on behalf of someone else?
-    // TODO: difference between repay and liquidate, who is calling - and an incentive?
     function repay(uint256 _vaultId, uint256 _amount) external {
         uint256 borrowed = getVaultState[_vaultId].borrowed;
         require(borrowed != 0, "Repay against no debt");
         require(borrowed <= _amount, "Repay greater than debt");
 
-        getVaultState[_vaultId].borrowed -=  _amount;
+        getVaultState[_vaultId].borrowed -= _amount;
         totalBorrowed -= _amount;
-
-        uint256 prevBal = EBTC.balanceOf(msg.sender);
-        emit Debug("prevBal", prevBal);
         EBTC.burn(msg.sender, _amount);
-        uint256 afterBal = EBTC.balanceOf(address(this));
-        require(afterBal - prevBal == _amount, "Require appropriate payment");
     }
 
     // Liquidate

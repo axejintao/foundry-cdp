@@ -123,4 +123,33 @@ contract SampleContractTest is Test {
         assert(afterWithdrawOne == withdrawAmount);
         assert(beforeBalance + withdrawAmount == WETH.balanceOf(address(this)));
     }
+
+    function testFailBorrowOtherVault() public {
+        getSomeToken(address(WETH), 100e18);
+        vm.startPrank(address(WETH));
+        den.createVault();
+        den.deposit(0, 1e18);
+        vm.stopPrank();
+
+        den.borrow(0, 1e18);
+    }
+
+    function testFailBorrowNoCollateral() public {
+        den.createVault();
+
+        den.borrow(0, 1e18);
+    }
+
+    function testFailRepayNoDebt() public {
+        setupBasicVault();
+
+        den.repay(0, 1e18);
+    }
+
+    function testFailRepayOverDebt() public {
+        setupBasicVault();
+        den.borrow(0, 25e16);
+
+        den.repay(0, 1e18);
+    }
 }
