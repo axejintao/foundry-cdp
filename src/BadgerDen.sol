@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.15;
 
-// NOTE: Solmate doesn't check for token existence, this may cause bugs if you enable any collateral
 import { SafeTransferLib } from "solmate/utils/SafeTransferLib.sol";
 
 import { ERC20 } from "solmate/tokens/ERC20.sol";
@@ -11,8 +10,6 @@ import { ERC721Enumerable } from "@openzeppelin/token/ERC721/extensions/ERC721En
 import { AggregatorV2V3Interface } from "./interfaces/Oracle.sol";
 import { eBTC } from "./eBTC.sol";
 
-// TODO: transfer from will break the user vault mapping, consider erc721 enumerable
-// construct a naive multiparty cdp based on WETH collateral and ChainLink oracle pricing for btc
 contract BadgerDen is ERC721Enumerable {
     using SafeTransferLib for ERC20;
 
@@ -21,18 +18,16 @@ contract BadgerDen is ERC721Enumerable {
         uint256 borrowed;
     }
 
-    uint256 constant RATIO_DECIMALS = 10 ** 8;
-    uint256 constant NUMERATOR = 1e36; // is there a better way to do this, gives 18 decimal rate
+    uint256 constant RATIO_DECIMALS = 1e18;
+    uint256 constant NUMERATOR = 1e36;
 
-    // TODO: should this naming convention be ugly EBtc? :(
     eBTC immutable public EBTC;
     ERC20 immutable public COLLATERAL;
     AggregatorV2V3Interface immutable public ORACLE;
 
     mapping(uint256 => VaultState) public getVaultState;
 
-    uint256 loanToValue = 8e17; 
-    // allow vault id zero to be used as a canary
+    uint256 loanToValue = 8e17;
     uint256 public nextVaultId = 0;
     uint256 public totalDeposited;
     uint256 public totalBorrowed;
@@ -50,11 +45,12 @@ contract BadgerDen is ERC721Enumerable {
         loanToValue = _loanToValue;
     }
 
-    function createVault() public {
-        // are these references need to be cached?
+    function createVault() public returns (uint256 vaultId) {
         getVaultState[nextVaultId] = VaultState(0, 0);
         _mint(msg.sender, nextVaultId);
-        nextVaultId++;
+        unchecked {
+            vaultId = nextVaultId++;
+        }
     }
 
     // Deposit
@@ -62,9 +58,10 @@ contract BadgerDen is ERC721Enumerable {
         require(COLLATERAL.balanceOf(msg.sender) >= _amount, "Insufficient collateral");
         require(_vaultId < nextVaultId, "Invalid vaultId");
 
-        // Increase deposited
         totalDeposited += _amount;
-        getVaultState[_vaultId].collateral += _amount;
+        unchecked {
+            getVaultState[_vaultId].collateral += _amount;
+        }
 
         COLLATERAL.safeTransferFrom(msg.sender, address(this), _amount);
     }
@@ -89,21 +86,14 @@ contract BadgerDen is ERC721Enumerable {
         uint256 collateral = getVaultState[_vaultId].collateral;
         require(collateral != 0, "Borrow against no collateral");
 
-        // Checks
         uint256 borrowCached = getVaultState[_vaultId].borrowed + _amount;
-        
-        // Check if borrow is solvent
-        uint256 maxBorrowCached = getCollateralBorrow(collateral);
-        emit Debug("maxBorrowCached", maxBorrowCached);
+        require(borrowCached <= getCollateralBorrow(collateral), "Over debt limit");
 
-        // how does the caching there help?
-        require(borrowCached <= maxBorrowCached, "Over debt limit");
-
-        // Effect
         totalBorrowed += _amount;
-        getVaultState[_vaultId].borrowed = borrowCached;
+        unchecked {
+            getVaultState[_vaultId].borrowed = borrowCached;
+        }
 
-        // Interaction
         EBTC.mint(msg.sender, _amount);
     }
 
@@ -113,15 +103,14 @@ contract BadgerDen is ERC721Enumerable {
         require(borrowed != 0, "Repay against no debt");
         require(borrowed <= _amount, "Repay greater than debt");
 
-        getVaultState[_vaultId].borrowed -= _amount;
         totalBorrowed -= _amount;
+        unchecked {
+            getVaultState[_vaultId].borrowed -= _amount;
+        }
         EBTC.burn(msg.sender, _amount);
     }
 
     // Liquidate
-    // TODO: this is probably so gas inefficient :( t11s rolling in his grave
-    // TODO: think about liquidation incentives, and properly liquidating the correct amount
-    // TODO: there are boundary checks here that need to be added, there are also liquidation bonus possible
     function liquidate(uint256 _vaultId, uint256 _amount) external {
         VaultState memory vaultState = getVaultState[_vaultId];
         uint256 maxBorrow = getCollateralBorrow(vaultState.collateral);
@@ -145,14 +134,16 @@ contract BadgerDen is ERC721Enumerable {
     }
 
     function getCollateralBorrow(uint256 _collateral) public view returns (uint256) {
-        uint256 maxCollateral = _collateral * loanToValue / RATIO_DECIMALS;
-        return maxCollateral * getTokensPerCollateral();
+        unchecked {
+            uint256 maxCollateral = _collateral * loanToValue / RATIO_DECIMALS;
+            return maxCollateral * getTokensPerCollateral() / RATIO_DECIMALS;
+        }
     }
 
-    // TODO: this is a naive check, really would want to scrutinize
     function getTokensPerCollateral() public view returns (uint256) {
-        // unsafe, need to add some data checks here
-        (, int256 answer,,,) = ORACLE.latestRoundData(); 
-        return NUMERATOR / uint256(answer);
+        (, int256 answer,, uint256 updatedAt,) = ORACLE.latestRoundData();
+        // NOTE - this require statement bricks withdraw, borrow, liquidate while stale!
+        require(updatedAt >= block.timestamp - 1 hours);
+        return (NUMERATOR / uint256(answer));
     }
 }
